@@ -43,7 +43,10 @@ import org.opendaylight.yangtools.concepts.Path;
 public class GenericEntity<T extends Path<T>> implements Serializable, Identifiable<T> {
     private static final long serialVersionUID = 1L;
 
+    // type: "openflow" or "netconf"
     private final String type;
+    // id: The identifier is an instance identifier path.
+    // 比如某个openflow node节点的InstanceIdentifier?
     private final T id;
 
     protected GenericEntity(@Nonnull String type, @Nonnull T id) {

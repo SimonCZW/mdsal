@@ -27,6 +27,8 @@ import org.opendaylight.yangtools.concepts.Path;
  * @param <P> the instance identifier path type
  * @param <E> the GenericEntity type
  */
+// 一种接口，为组件/应用程序提供在当前集群成员上请求给定实体的所有权的方法
+// 实体所有权始终与进程相关联，同一进程上的两个组件无法同时注册给定实体的候选者
 public interface GenericEntityOwnershipService<P extends Path<P>, E extends GenericEntity<P>,
         L extends GenericEntityOwnershipListener<P, ? extends GenericEntityOwnershipChange<P, E>>> {
 
@@ -43,6 +45,7 @@ public interface GenericEntityOwnershipService<P extends Path<P>, E extends Gene
      * @return a registration object that can be used to unregister the Candidate
      * @throws CandidateAlreadyRegisteredException if the candidate was already registered
      */
+    // 注册为entity的 candidate
     GenericEntityOwnershipCandidateRegistration<P, E> registerCandidate(@Nonnull E entity)
             throws CandidateAlreadyRegisteredException;
 
@@ -56,6 +59,7 @@ public interface GenericEntityOwnershipService<P extends Path<P>, E extends Gene
      * @param listener the listener that is interested in the entities
      * @return a registration object that can be used to unregister the Listener
      */
+    // 注册某个类型的entity(openflow/netconf) ownership状态改变的listener
     GenericEntityOwnershipListenerRegistration<P, L> registerListener(@Nonnull String entityType, @Nonnull L listener);
 
     /**
@@ -64,6 +68,7 @@ public interface GenericEntityOwnershipService<P extends Path<P>, E extends Gene
      * @param forEntity the entity to query.
      * @return an Optional EntityOwnershipState whose instance is present if the entity is found
      */
+    // 获取某个entity ownership状态
     Optional<EntityOwnershipState> getOwnershipState(@Nonnull E forEntity);
 
     /**
@@ -72,5 +77,6 @@ public interface GenericEntityOwnershipService<P extends Path<P>, E extends Gene
      * @param forEntity the entity to query.
      * @return true if a candidate is registered locally, false otherwise
      */
+    // 检查本地是否注册了entity的candidate选举
     boolean isCandidateRegistered(@Nonnull E forEntity);
 }

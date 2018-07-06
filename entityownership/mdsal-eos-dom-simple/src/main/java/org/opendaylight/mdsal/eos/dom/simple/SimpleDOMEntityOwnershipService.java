@@ -69,16 +69,21 @@ public final class SimpleDOMEntityOwnershipService implements DOMEntityOwnership
     public DOMEntityOwnershipCandidateRegistration registerCandidate(final DOMEntity entity)
             throws CandidateAlreadyRegisteredException {
         synchronized (entities) {
+            // 判断entity是否已经被注册过, 报错
             final DOMEntity prev = entities.get(entity.getType(), entity.getIdentifier());
             if (prev != null) {
                 throw new CandidateAlreadyRegisteredException(prev);
             }
 
+            // 第一次注册, put到数据结构中记录
             entities.put(entity.getType(), entity.getIdentifier(), entity);
             LOG.debug("{}: registered candidate {}", uuid, entity);
         }
 
+        // 1.给entity 封装状态
+        // 2.通知注册的listener, 状态改变为目前这个
         notifyListeners(entity, LOCAL_OWNERSHIP_GRANTED);
+        // 返回CandidateRegistration对象，封装了entity
         return new EntityRegistration(entity);
     }
 
@@ -92,14 +97,17 @@ public final class SimpleDOMEntityOwnershipService implements DOMEntityOwnership
             LOG.trace("{}: acquired candidates {} for new listener {}", uuid, owned, listener);
         }
 
+        // 记录已经注册监听的 type和listener 映射关系
         synchronized (listeners) {
             listeners.put(entityType, listener);
         }
 
+        // 通知此时注册的这个listener, 已经存在这么多这个 type的entity状态变为LOCAL_OWNERSHIP_GRANTED
         for (DOMEntity entity : owned) {
             notifyListener(listener, new DOMEntityOwnershipChange(entity, LOCAL_OWNERSHIP_GRANTED));
         }
         LOG.debug("{}: registered listener {}", uuid, listener);
+        // 返回listener注册
         return new ListenerRegistration(entityType, listener);
     }
 
@@ -135,6 +143,7 @@ public final class SimpleDOMEntityOwnershipService implements DOMEntityOwnership
     }
 
     private void notifyListeners(final DOMEntity entity, final EntityOwnershipChangeState state) {
+        //new DEOSChange,封装entity及状态
         final DOMEntityOwnershipChange change = new DOMEntityOwnershipChange(entity, state);
 
         final Collection<DOMEntityOwnershipListener> snap;
@@ -143,6 +152,7 @@ public final class SimpleDOMEntityOwnershipService implements DOMEntityOwnership
             snap = ImmutableList.copyOf(listeners.get(entity.getType()));
         }
 
+        // 通知listener entity状态改变
         for (DOMEntityOwnershipListener listener : snap) {
             notifyListener(listener, change);
         }
