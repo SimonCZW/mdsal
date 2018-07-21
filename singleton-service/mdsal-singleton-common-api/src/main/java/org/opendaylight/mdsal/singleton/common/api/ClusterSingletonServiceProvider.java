@@ -19,6 +19,11 @@ package org.opendaylight.mdsal.singleton.common.api;
  * closed prior to relinquishing service group ownership. To achieve ownership of the service group,
  * a service group candidate must hold ownership of both these entities.
  */
+/*
+    可提供两种服务功能:
+    1.提供注册service服务, 能够在实现只在集群一个节点上运行
+    2.提供services group概念,能够让service group所有service运行在一个集群节点上
+ */
 public interface ClusterSingletonServiceProvider extends AutoCloseable {
 
     /**

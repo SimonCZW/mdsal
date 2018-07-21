@@ -84,12 +84,19 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
     /**
      * This method must be called once on startup to initialize this provider.
      */
+    // 在dom-singleton.xml blueprint中调用
     public final void initializeProvider() {
         LOG.debug("Initialization method for ClusterSingletonService Provider {}", this);
+        // 调用子类DOMClusterSingletonServiceProviderImpl的方法registerListener, 向eos注册监听
         this.serviceEntityListenerReg = registerListener(SERVICE_ENTITY_TYPE, entityOwnershipService);
         this.asyncCloseEntityListenerReg = registerListener(CLOSE_SERVICE_ENTITY_TYPE, entityOwnershipService);
     }
 
+    /*
+        1.支持单service的singleton，每个service的getIdentifier不同即可. (一个service一个group而已)
+        2.支持service Group singleton，只需要各个service的各个getIdentifier一样即可.
+            本质上为一个id创建选举, 第二个service注册时id一样，就会找到group并直接跳过 id选举, 直接将第二个service加入到已存在group, 然后根据group对象的localServicesState决定是否是owner
+     */
     @Override
     public final synchronized ClusterSingletonServiceRegistration registerClusterSingletonService(
             @CheckForNull final ClusterSingletonService service) {
@@ -100,12 +107,20 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
                 "ClusterSingletonService identifier may not be null nor empty");
 
         final ClusterSingletonServiceGroup<P, E, C> serviceGroup;
+        // 判断此service id是否存在
         ClusterSingletonServiceGroup<P, E, C> existing = serviceGroupMap.get(serviceIdentifier);
         if (existing == null) {
+            // 本地不存在service, 为此创建service创建ClusterSingletonServiceGroupImpl对象
             serviceGroup = createGroup(serviceIdentifier, new ArrayList<>(1));
             serviceGroupMap.put(serviceIdentifier, serviceGroup);
 
             try {
+                /*
+                    1.注册SERVICE_ENITY_TYPE = "org.opendaylight.mdsal.ServiceEntityType"类型的此serviceGroupId选举（eos.registerCandidate()）
+                    2.如果SERVICE_ENITY_TYPE注册了为owner，再注册CLOSE_SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.AsyncServiceCloseEntityType";类型的选举（eos.registerCandidate()）
+                    3.如果CLOSE_SERVICE_ENTITY_TYPE 也是owner（两次确认?），那么节点就正在是此group的ownership.
+                        后续再添加service到此group就会直接运行其方法instantiateServiceInstance
+                 */
                 initializeOrRemoveGroup(serviceGroup);
             } catch (CandidateAlreadyRegisteredException e) {
                 throw new IllegalArgumentException("Service group already registered", e);
@@ -114,6 +129,10 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
             serviceGroup = existing;
         }
 
+        /*
+            如果serviceGroup在当前节点是ownership，service执行运行instantiateServiceInstance方法
+                serviceGroup有可能已经选举好了（上一个注册的service就会选举）
+         */
         serviceGroup.registerService(service);
         return new AbstractClusterSingletonServiceRegistration(service) {
             @Override
@@ -127,6 +146,9 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
 
     private ClusterSingletonServiceGroup<P, E, C> createGroup(final String serviceIdentifier,
             final List<ClusterSingletonService> services) {
+        /*
+            会为每个注册的service创建ClusterSingletonServiceGroupImpl, 封装了service的identifier
+         */
         return new ClusterSingletonServiceGroupImpl<>(serviceIdentifier, entityOwnershipService,
                 createEntity(SERVICE_ENTITY_TYPE, serviceIdentifier),
                 createEntity(CLOSE_SERVICE_ENTITY_TYPE, serviceIdentifier), services);
@@ -135,6 +157,13 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
     private void initializeOrRemoveGroup(final ClusterSingletonServiceGroup<P, E, C> group)
             throws CandidateAlreadyRegisteredException {
         try {
+            /*
+                效果:
+                    1.注册SERVICE_ENITY_TYPE = "org.opendaylight.mdsal.ServiceEntityType"类型的此serviceGroupId选举
+                    2.如果SERVICE_ENITY_TYPE注册了为owner，再注册CLOSE_SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.AsyncServiceCloseEntityType";类型的选举
+                    3.如果CLOSE_SERVICE_ENTITY_TYPE 也是owner（两次确认?），那么节点就正在是此group的ownership.
+                        后续再添加service到此group就会直接运行其方法instantiateServiceInstance
+             */
             group.initialize();
         } catch (CandidateAlreadyRegisteredException e) {
             serviceGroupMap.remove(group.getIdentifier(), group);
@@ -231,6 +260,9 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
         final String serviceIdentifier = getServiceIdentifierFromEntity(ownershipChange.getEntity());
         final ClusterSingletonServiceGroup<P, E, C> serviceHolder = serviceGroupMap.get(serviceIdentifier);
         if (serviceHolder != null) {
+            /*
+                当service的ownership状态变化, 调用ClusterSingletonServiceGroupImpl的ownershipChanged方法
+             */
             serviceHolder.ownershipChanged(ownershipChange);
         } else {
             LOG.debug("ClusterSingletonServiceGroup was not found for serviceIdentifier {}", serviceIdentifier);

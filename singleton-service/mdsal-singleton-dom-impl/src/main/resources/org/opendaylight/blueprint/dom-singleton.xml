@@ -6,6 +6,7 @@
   <reference id="domEntityOwnershipService" interface="org.opendaylight.mdsal.eos.dom.api.DOMEntityOwnershipService"/>
 
   <bean id="clusterSingletonService" class="org.opendaylight.mdsal.singleton.dom.impl.DOMClusterSingletonServiceProviderImpl" init-method="initializeProvider" destroy-method="close">
+    <!-- 注意这里引入的是DEOS -->
     <argument ref="domEntityOwnershipService"/>
   </bean>
 

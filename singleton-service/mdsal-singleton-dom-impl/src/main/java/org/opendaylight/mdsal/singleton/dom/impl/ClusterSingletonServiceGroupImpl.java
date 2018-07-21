@@ -187,8 +187,9 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
      * @param closeEntity as Entity instance
      * @param entityOwnershipService GenericEntityOwnershipService instance
      * @param parent parent service
-     * @param services Services list
+     * @param services Services list 传入时为空
      */
+    // 在SingletonServiceProvider中会为每个注册的service创建此对象
     ClusterSingletonServiceGroupImpl(final String identifier, final S entityOwnershipService, final E mainEntity,
             final E closeEntity, final List<ClusterSingletonService> services) {
         Preconditions.checkArgument(!identifier.isEmpty(), "Identifier may not be empty");
@@ -196,6 +197,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         this.entityOwnershipService = Preconditions.checkNotNull(entityOwnershipService);
         this.serviceEntity = Preconditions.checkNotNull(mainEntity);
         this.cleanupEntity = Preconditions.checkNotNull(closeEntity);
+        // 实例化时传入的是空 list
         this.serviceGroup = Preconditions.checkNotNull(services);
         LOG.debug("Instantiated new service group for {}", identifier);
     }
@@ -334,17 +336,23 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
 
     @Override
     void initialize() throws CandidateAlreadyRegisteredException {
+        // 初始化时: 锁
         lock.lock();
         try {
             Preconditions.checkState(serviceEntityState == EntityState.UNREGISTERED,
                     "Singleton group %s was already initilized", identifier);
 
             LOG.debug("Initializing service group {} with services {}", identifier, serviceGroup);
+            //start
             startCapture();
+            // 注册的Entity类型: SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.ServiceEntityType";
             serviceEntityReg = entityOwnershipService.registerCandidate(serviceEntity);
+            // 设置状态
             serviceEntityState = EntityState.REGISTERED;
+            // 监听状态变化事件, 修改状态serviceEntityState
             endCapture().forEach(this::lockedOwnershipChanged);
         } finally {
+            // 完成初始化: 解锁
             lock.unlock();
         }
     }
@@ -354,19 +362,29 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                 identifier);
     }
 
+    /*
+        会在AbstractClusterSingletonServiceProviderImpl.registerClusterSingletonService最后调用此方法,
+        目的:
+            将service加入到serviceGroup中,
+                如果此时已经选举好了ownership为本地，就会直接调用service.instantiateServiceInstance();
+                如果此时未选举好，那么仅加入serviceGroup足够，如果后面选举好ownership为本地，会直接调用serviceGroup的service的instantiateServiceInstance();方法
+     */
     @Override
     void registerService(final ClusterSingletonService service) {
         Verify.verify(identifier.equals(service.getIdentifier().getValue()));
         checkNotClosed();
 
+        // 开始时, 锁
         lock.lock();
         try {
             Preconditions.checkState(serviceEntityState != EntityState.UNREGISTERED,
                     "Service group %s is not initialized yet", identifier);
 
             LOG.debug("Adding service {} to service group {}", service, identifier);
+            // 正式把service添加到serviceGroup这个list中, 初始化此对象时传入空list赋值给serviceGroup
             serviceGroup.add(service);
 
+            // 判断localServicesState
             switch (localServicesState) {
                 case STARTED:
                     LOG.debug("Service group {} starting late-registered service {}", identifier, service);
@@ -379,6 +397,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                     throw new IllegalStateException("Unhandled local services state " + localServicesState);
             }
         } finally {
+            // 操作完成, 解锁
             lock.unlock();
             finishCloseIfNeeded();
         }
@@ -421,6 +440,12 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         }
     }
 
+    /*
+        AbstractClusterSingletonServiceProviderImpl.ownershipChanged调用此方法.
+            正在监听EOS的ownership是上层的AbstractClusterSingletonServiceProviderImpl
+
+        AbstractClusterSingletonServiceProviderImpl会触发Group对象的变化
+     */
     @Override
     void ownershipChanged(final C ownershipChange) {
         LOG.debug("Ownership change {} for ClusterSingletonServiceGroup {}", ownershipChange, identifier);
@@ -447,9 +472,16 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
     @GuardedBy("lock")
     private void lockedOwnershipChanged(final C ownershipChange) {
         final E entity = ownershipChange.getEntity();
-        if (serviceEntity.equals(entity)) {
+        if (serviceEntity.equals(entity)) { // SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.ServiceEntityType";
+            // 后续效果是：当serviceEntity已经是OWNER时, 为cleanupEntity注册(registerCandidate)
             serviceOwnershipChanged(ownershipChange.getState(), ownershipChange.inJeopardy());
-        } else if (cleanupEntity.equals(entity)) {
+        } else if (cleanupEntity.equals(entity)) { // CLOSE_SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.AsyncServiceCloseEntityType";
+            /*
+                效果: 如果cleanupEntity为OWNER时, 就会调用
+                    1.serviceGroup中的service.instantiateServiceInstance();方法
+                    2.如果此时serviceGroup还不存在service，那么仅需要设置localServicesState状态即可.在后续注册service时就会根据此状态，直接执行其instantiateServiceInstance方法
+                        此机制是能够实现group级别选举！只需要后面service添加到此group，如果选好了service直接运行的方法
+             */
             cleanupCandidateOwnershipChanged(ownershipChange.getState(), ownershipChange.inJeopardy());
         } else {
             LOG.warn("Group {} received unrecognized change {}", identifier, ownershipChange);
@@ -503,6 +535,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                         LOG.debug("Service group {} already has local services running", identifier);
                         break;
                     case STOPPED:
+                        // 初始状态为STOPPED, 这里意味着选举出来了本地是master，且状态为STOPPED(未调用过start方法. 理解:flag) 需要调用startServices
                         startServices();
                         break;
                     case STOPPING:
@@ -569,6 +602,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                 }
 
                 serviceEntityState = EntityState.OWNED;
+                // 为cleanupEntity注册candidate
                 takeOwnership();
                 break;
             case LOCAL_OWNERSHIP_LOST_NEW_OWNER:
@@ -628,11 +662,15 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
             LOG.error("Service group {} failed to take ownership", identifier, e);
         }
 
+        // 为cleanupEntity监听state变化
         endCapture().forEach(this::lockedOwnershipChanged);
     }
 
     /*
      * Help method calls instantiateServiceInstance method for create single cluster-wide service instance.
+     */
+    /*
+        在
      */
     @SuppressWarnings("checkstyle:IllegalCatch")
     private void startServices() {
@@ -642,6 +680,16 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         }
 
         LOG.debug("Service group {} starting services", identifier);
+        /*
+            初始化此对象时，传入的serviceGroup为空list.
+                在AbstractClusterSingletonServiceProviderImpl.registerClusterSingletonService最后会调用`registerService`方法给group真正传入service对象
+
+            目的应该是:
+                1.如果在registerService前选好了状态, 那么在`registerService`时就直接调用service.instantiateServiceInstance()
+                2.如果在registerService后才选好状态, 那么选好时触发到此方法, 此时serviceGroup已有service，调用其instantiateServiceInstance()方法（即当前位置）
+
+            目的是不管registerService调用时是否已经选举出状态，都能够调用service.instantiateServiceInstance()
+         */
         serviceGroup.forEach(service -> {
             LOG.debug("Starting service {}", service);
             try {
@@ -651,6 +699,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
             }
         });
 
+        // 设置localServicesState，目的是如果registerService比此方法调用慢，那么registerService时可根据此时设置的状态调用 service.instantiateServiceInstance()
         localServicesState = ServiceState.STARTED;
         LOG.debug("Service group {} services started", identifier);
     }

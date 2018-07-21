@@ -34,14 +34,16 @@ public final class DOMClusterSingletonServiceProviderImpl extends
      * @param entityOwnershipService - we need only {@link GenericEntityOwnershipService}
      */
     public DOMClusterSingletonServiceProviderImpl(final DOMEntityOwnershipService entityOwnershipService) {
-        super(entityOwnershipService);
+        super(entityOwnershipService); // 继承AbstractClusterSingletonServiceProviderImpl
     }
 
+    // 后续实现的方法都会在父类中被调用(多态)
     @Override
     protected DOMEntity createEntity(final String type, final String ident) {
         return new DOMEntity(type, ident);
     }
 
+    // 在父类中初始化initia 方法中监听类型: SERVICE_ENTITY_TYPE, CLOSE_SERVICE_ENTITY_TYPE
     @Override
     protected DOMEntityOwnershipListenerRegistration registerListener(final String type,
             final DOMEntityOwnershipService eos) {
