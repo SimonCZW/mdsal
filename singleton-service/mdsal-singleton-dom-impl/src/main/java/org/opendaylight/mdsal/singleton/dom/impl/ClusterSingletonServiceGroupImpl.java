@@ -242,6 +242,9 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         return closeFuture.get() != null;
     }
 
+    /*
+        定义capture变量为空的list, 待ClusterSingletonServiceProvider调用当前的GroupImpl对象的ownershipChanged方法，就会给capture变量add事件
+     */
     @GuardedBy("lock")
     private void startCapture() {
         Verify.verify(capture == null, "Service group {} is already capturing events {}", identifier, capture);
@@ -249,6 +252,11 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         LOG.debug("Service group {} started capturing events", identifier);
     }
 
+    /*
+        结束capture
+            1.返回capture变量
+            2.重置capture变量为null
+     */
     private List<C> endCapture() {
         final List<C> ret = Verify.verifyNotNull(capture, "Service group {} is not currently capturing", identifier);
         capture = null;
@@ -343,13 +351,26 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                     "Singleton group %s was already initilized", identifier);
 
             LOG.debug("Initializing service group {} with services {}", identifier, serviceGroup);
-            //start
+            /*
+                start, 会定义capture变量list.
+                待上层调用 自身ownershipChanged()方法 往capture变量add ownershipChange对象(后续调用registerCandidate 就会触发)
+             */
             startCapture();
             // 注册的Entity类型: SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.ServiceEntityType";
             serviceEntityReg = entityOwnershipService.registerCandidate(serviceEntity);
             // 设置状态
             serviceEntityState = EntityState.REGISTERED;
-            // 监听状态变化事件, 修改状态serviceEntityState
+            /*
+                在startCapture()方法设置了capture为空list, 然后调用registerCandidate方法,上层就会把ownershipChange对象add到capture对象.
+                调用endCapture方法, 返回ownershipChange对象. 然后调用lockedOwnershipChanged, 传入的是得到的ownershipChange对象.
+
+                后续是完整调用链:
+                    1.当serviceEntity已经是OWNER时, 为cleanupEntity注册(registerCandidate) //CLOSE_SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.AsyncServiceCloseEntityType";
+                    2.如果cleanupEntity为OWNER时, 就会调用startServices()方法, 会:
+                        2.1 调用serviceGroup中的service.instantiateServiceInstance();方法
+                        2.2 如果此时serviceGroup还不存在service，那么仅需要设置localServicesState状态即可, 在后续registerService时就会根据此状态，直接执行service其instantiateServiceInstance方法
+                            此机制是能够实现group级别选举！只需要后面service添加到此group，如果选好了service直接运行的方法
+             */
             endCapture().forEach(this::lockedOwnershipChanged);
         } finally {
             // 完成初始化: 解锁
@@ -453,8 +474,10 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         lock.lock();
         try {
             if (capture != null) {
+                // capture变量只有当调用了startcapture()方法时才会是list, 非null
                 capture.add(ownershipChange);
             } else {
+                // 如果capture为null, 说明对象没用startcapture()方法. 直接触发ownershipshipchanged处理
                 lockedOwnershipChanged(ownershipChange);
             }
         } finally {
@@ -477,7 +500,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
             serviceOwnershipChanged(ownershipChange.getState(), ownershipChange.inJeopardy());
         } else if (cleanupEntity.equals(entity)) { // CLOSE_SERVICE_ENTITY_TYPE = "org.opendaylight.mdsal.AsyncServiceCloseEntityType";
             /*
-                效果: 如果cleanupEntity为OWNER时, 就会调用
+                效果: 如果cleanupEntity为OWNER时, 就会调用startServices()方法
                     1.serviceGroup中的service.instantiateServiceInstance();方法
                     2.如果此时serviceGroup还不存在service，那么仅需要设置localServicesState状态即可.在后续注册service时就会根据此状态，直接执行其instantiateServiceInstance方法
                         此机制是能够实现group级别选举！只需要后面service添加到此group，如果选好了service直接运行的方法

@@ -135,6 +135,7 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
          */
         serviceGroup.registerService(service);
         return new AbstractClusterSingletonServiceRegistration(service) {
+            // 此方法用于上层应用主动干掉singleton service? 让其迁移?
             @Override
             protected void removeRegistration() {
                 // We need to bounce the unregistration through a ordered lock in order not to deal with asynchronous
