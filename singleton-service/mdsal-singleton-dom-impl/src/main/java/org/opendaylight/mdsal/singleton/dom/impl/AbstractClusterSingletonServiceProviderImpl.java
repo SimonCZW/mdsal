@@ -197,10 +197,11 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
             // Close the group and replace it with a placeholder
             LOG.debug("Closing service group {}", serviceIdentifier);
             // 效果仅仅会关闭service以及EOS中close serviceEntity. cleanupEntity不受影响?
-            future = lookup.closeClusterSingletonGroup();
+            future = lookup.closeClusterSingletonGroup(); // 异步, 返回future对象
             placeHolder = new PlaceholderGroup<>(lookup, future);
 
             final String identifier = service.getIdentifier().getValue();
+            // 替换serviceGroup对象，理解PlaceholderGroup用于托管serviceGroup关闭时有此group service注册的情况
             verify(serviceGroupMap.replace(identifier, lookup, placeHolder));
             LOG.debug("Replaced group {} with {}", serviceIdentifier, placeHolder);
         }
@@ -213,6 +214,7 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
         LOG.debug("Service group {} closed", identifier);
 
         final List<ClusterSingletonService> services = placeHolder.getServices();
+        // 当在异步停最后一个service时，又有另一个此group service注册时，非empty走到后面流程重新创建ClusterSingletonServiceGroupImpl对象
         if (services.isEmpty()) {
             // No services, we are all done
             if (serviceGroupMap.remove(identifier, placeHolder)) {
