@@ -264,6 +264,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         return ret;
     }
 
+    // 最后一个service remove时，删除service group会调用
     @GuardedBy("lock")
     private void lockedClose(final SettableFuture<Void> future) {
         if (serviceEntityReg != null) {
@@ -281,7 +282,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         // unregistered.
         switch (serviceEntityState) {
             case REGISTERED:
-            case UNOWNED:
+            case UNOWNED: // 成功关闭状态
             case UNREGISTERED:
                 // We have either successfully shut down, or have never started up, proceed with termination
                 break;
@@ -318,7 +319,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
 
         switch (cleanupEntityState) {
             case REGISTERED:
-            case UNOWNED:
+            case UNOWNED: // 成功关闭状态
             case UNREGISTERED:
                 // We have either successfully shut down, or have never started up, proceed with termination
                 break;
@@ -434,11 +435,13 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
         try {
             // There is a slight problem here, as the type does not match the list type, hence we need to tread
             // carefully.
+            // serviceGroup只有此唯一service, 直接返回
             if (serviceGroup.size() == 1) {
                 Verify.verify(serviceGroup.contains(service));
                 return true;
             }
 
+            // 非group中最后一个service会执行后续逻辑
             Verify.verify(serviceGroup.remove(service));
             LOG.debug("Service {} was removed from group.", service.getIdentifier().getValue());
 
@@ -584,7 +587,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
     }
 
     private void serviceOwnershipChanged(final EntityOwnershipChangeState state, final boolean jeopardy) {
-        if (jeopardy) {
+        if (jeopardy) { //jeopardy危险, 状态不确定
             LOG.info("Service group {} service entity ownership uncertain", identifier);
 
             // Service entity ownership is uncertain, which means we want to record the state, but we do not want
@@ -618,7 +621,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
 
         switch (state) {
             case LOCAL_OWNERSHIP_GRANTED:
-            case LOCAL_OWNERSHIP_RETAINED_WITH_NO_CHANGE:
+            case LOCAL_OWNERSHIP_RETAINED_WITH_NO_CHANGE: // registerCandidate时触发事件到达
                 if (serviceEntityReg == null) {
                     LOG.debug("Service group {} ignoring service entity ownership when unregistered", identifier);
                     return;
@@ -629,14 +632,15 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                 takeOwnership();
                 break;
             case LOCAL_OWNERSHIP_LOST_NEW_OWNER:
-            case LOCAL_OWNERSHIP_LOST_NO_OWNER:
+            case LOCAL_OWNERSHIP_LOST_NO_OWNER: // entityReg.close()时触发事件到达
                 LOG.debug("Service group {} lost service entity ownership", identifier);
                 serviceEntityState = EntityState.UNOWNED;
-                if (stopServices()) {
+                if (stopServices()) { //会调用service.closeServiceInstance
                     LOG.debug("Service group {} already stopping services, postponing cleanup", identifier);
                     return;
                 }
 
+                // 关闭service
                 if (cleanupEntityReg != null) {
                     cleanupEntityReg.close();
                     cleanupEntityReg = null;
@@ -763,6 +767,7 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
                     }
                 }, MoreExecutors.directExecutor());
 
+                // 返回false
                 return localServicesState == ServiceState.STOPPING;
             case STOPPED:
                 LOG.debug("Service group {} has already stopped services", identifier);
@@ -815,6 +820,11 @@ final class ClusterSingletonServiceGroupImpl<P extends Path<P>, E extends Generi
             // Double-check if the services should really be down
             switch (cleanupEntityState) {
                 case OWNED:
+                    /*
+                        在 serviceEntityReg.close()后且已经调用service.closeServiceInstance会进入此
+
+                        在startServices方法中，首先就会判断isClosed()，并不会启动service，会直接return
+                     */
                     // We have finished stopping services, but we own cleanup, e.g. we should start them again.
                     startServices();
                     return;

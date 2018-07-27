@@ -134,8 +134,14 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
                 serviceGroup有可能已经选举好了（上一个注册的service就会选举）
          */
         serviceGroup.registerService(service);
-        return new AbstractClusterSingletonServiceRegistration(service) {
-            // 此方法用于上层应用主动干掉singleton service? 让其迁移?
+        return new AbstractClusterSingletonServiceRegistration(service) { // 总结一下：关闭singleton service入口: registration.close()
+            /*
+                此方法用于上层应用主动干掉singleton service? 让其迁移?
+
+                在应用层需要广播singleton service, 只需要调用此返回对象AbstractClusterSingletonServiceRegistration的close()方法.
+                    close()方法是其父类方法, 而close()方法会调用子类的removeRegistration()方法（多态）
+                所有调用AbstractClusterSingletonServiceRegistration.close()最终会调用当前的removeRegistration()方法:
+             */
             @Override
             protected void removeRegistration() {
                 // We need to bounce the unregistration through a ordered lock in order not to deal with asynchronous
@@ -178,12 +184,19 @@ public abstract class AbstractClusterSingletonServiceProviderImpl<P extends Path
         final ListenableFuture<?> future;
         synchronized (this) {
             final ClusterSingletonServiceGroup<P, E, C> lookup = verifyNotNull(serviceGroupMap.get(serviceIdentifier));
+            /*
+                当serviceGroup有且只有此一个service时会返回true, 不执行unregisterService方法后面逻辑.
+                非最后一个service会直接remove sevice并且调用service.closeServiceInstance() 然后再返回false
+             */
             if (!lookup.unregisterService(service)) {
+                // 非group最后一个service, 直接return
                 return;
             }
 
+            // 即group中最后一个service才会执行后续逻辑
             // Close the group and replace it with a placeholder
             LOG.debug("Closing service group {}", serviceIdentifier);
+            // 效果仅仅会关闭service以及EOS中close serviceEntity. cleanupEntity不受影响?
             future = lookup.closeClusterSingletonGroup();
             placeHolder = new PlaceholderGroup<>(lookup, future);
 
